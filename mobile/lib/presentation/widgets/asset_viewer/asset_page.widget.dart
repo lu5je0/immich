@@ -15,11 +15,13 @@ import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_details.wi
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_stack.provider.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_stack.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/ocr_overlay.widget.dart';
+import 'package:immich_mobile/presentation/widgets/asset_viewer/ultra_hdr_image.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/video_viewer.widget.dart';
 import 'package:immich_mobile/presentation/widgets/images/image_provider.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/is_motion_video_playing.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/ultra_hdr.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/timeline.provider.dart';
 import 'package:immich_mobile/providers/view_intent/view_intent_file_path.provider.dart';
@@ -60,6 +62,16 @@ class _AssetPageState extends ConsumerState<AssetPage> {
 
   BaseAsset? _asset;
 
+  bool _hdrSuspended = false;
+  Timer? _hdrResumeTimer;
+  bool _nativeZoomed = false;
+  String? _shownHdrSource;
+  bool? _sentChromeVisible;
+  bool? _wasCurrent;
+  bool _routeIdle = false;
+  Timer? _routeIdleTimer;
+  ModalRoute? _route;
+
   @override
   void initState() {
     super.initState();
@@ -85,10 +97,59 @@ class _AssetPageState extends ConsumerState<AssetPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != _route) {
+      _route?.animation?.removeStatusListener(_onRouteAnimationStatus);
+      _route?.secondaryAnimation?.removeStatusListener(_onSecondaryAnimationStatus);
+      _route = route;
+      route?.animation?.addStatusListener(_onRouteAnimationStatus);
+      route?.secondaryAnimation?.addStatusListener(_onSecondaryAnimationStatus);
+      final status = route?.animation?.status;
+      if (status != null) {
+        _onRouteAnimationStatus(status);
+      }
+    }
+  }
+
+  void _onSecondaryAnimationStatus(AnimationStatus status) {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _onRouteAnimationStatus(AnimationStatus status) {
+    _routeIdleTimer?.cancel();
+    if (status == AnimationStatus.completed) {
+      // Let the hero flight fully finish (incl. its last frame swap to the
+      // contained image) before the HDR overlay is allowed to fade in.
+      _routeIdleTimer = Timer(const Duration(milliseconds: 150), () {
+        if (mounted && !_routeIdle) {
+          setState(() => _routeIdle = true);
+        }
+      });
+    } else if (_routeIdle) {
+      setState(() => _routeIdle = false);
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
   void dispose() {
     _scrollController.dispose();
     _scaleBoundarySub?.cancel();
     _eventSubscription?.cancel();
+    _hdrResumeTimer?.cancel();
+    _routeIdleTimer?.cancel();
+    _route?.animation?.removeStatusListener(_onRouteAnimationStatus);
+    _route?.secondaryAnimation?.removeStatusListener(_onSecondaryAnimationStatus);
+    if (_shownHdrSource != null) {
+      UltraHdrSession.clear();
+    }
+    _unwireHdrEvents();
     super.dispose();
   }
 
@@ -161,6 +222,9 @@ class _AssetPageState extends ConsumerState<AssetPage> {
         > 0 => _DragIntent.dismiss,
         _ => _DragIntent.none,
       };
+      if (_dragIntent != _DragIntent.none) {
+        _suspendHdr();
+      }
     }
 
     switch (_dragIntent) {
@@ -187,6 +251,9 @@ class _AssetPageState extends ConsumerState<AssetPage> {
 
     final intent = _dragIntent;
     _dragIntent = _DragIntent.none;
+    if (intent != _DragIntent.none) {
+      _resumeHdrSoon();
+    }
 
     switch (intent) {
       case _DragIntent.none:
@@ -327,12 +394,91 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     _listenForScaleBoundaries(controller);
   }
 
+  void _suspendHdr() {
+    _hdrResumeTimer?.cancel();
+    if (!_hdrSuspended) {
+      setState(() => _hdrSuspended = true);
+    }
+  }
+
+  void _resumeHdrSoon() {
+    _hdrResumeTimer?.cancel();
+    _hdrResumeTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted && _hdrSuspended) {
+        setState(() => _hdrSuspended = false);
+      }
+    });
+  }
+
+  void _wireHdrEvents() {
+    UltraHdrSession.ensureInstalled();
+    UltraHdrSession.onZoomChanged = _onNativeZoomChanged;
+    UltraHdrSession.onSingleTap = _onNativeSingleTap;
+  }
+
+  void _unwireHdrEvents() {
+    if (UltraHdrSession.onZoomChanged == _onNativeZoomChanged) {
+      UltraHdrSession.onZoomChanged = null;
+    }
+    if (UltraHdrSession.onSingleTap == _onNativeSingleTap) {
+      UltraHdrSession.onSingleTap = null;
+    }
+  }
+
+  void _syncHdrSession(String? source) {
+    if (_shownHdrSource == source) {
+      return;
+    }
+    _shownHdrSource = source;
+    if (source == null) {
+      UltraHdrSession.clear();
+      return;
+    }
+
+    _wireHdrEvents();
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final targetDimension = (MediaQuery.sizeOf(context).longestSide * devicePixelRatio * 2).round();
+    UltraHdrSession.setSource(source, targetDimension);
+  }
+
+  void _syncHdrChrome(bool controlsVisible) {
+    if (_sentChromeVisible == controlsVisible) {
+      return;
+    }
+    _sentChromeVisible = controlsVisible;
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final padding = MediaQuery.paddingOf(context);
+    UltraHdrSession.setChrome(
+      top: ((padding.top + kToolbarHeight) * devicePixelRatio).round(),
+      bottom: ((padding.bottom + 80) * devicePixelRatio).round(),
+      visible: controlsVisible,
+    );
+  }
+
+  void _onNativeZoomChanged(bool zoomed) {
+    if (!mounted) {
+      return;
+    }
+    _nativeZoomed = zoomed;
+    _viewer.setZoomed(zoomed);
+    if (zoomed) {
+      _viewer.setControls(false);
+    }
+  }
+
+  void _onNativeSingleTap() {
+    if (mounted && !_showingDetails) {
+      _viewer.toggleControls();
+    }
+  }
+
   Widget _buildPhotoView({
     required BaseAsset asset,
     required PhotoViewHeroAttributes? heroAttributes,
     required bool isCurrent,
     required bool isPlayingMotionVideo,
     required String? localFilePath,
+    required bool hdrActive,
   }) {
     final size = context.sizeData;
     final imageProvider = getFullImageProvider(asset, size: size, localFilePath: localFilePath);
@@ -348,7 +494,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
         filterQuality: FilterQuality.high,
         tightMode: true,
         enablePanAlways: true,
-        disableScaleGestures: _showingDetails,
+        disableScaleGestures: _showingDetails || hdrActive,
         scaleStateChangedCallback: _onScaleStateChanged,
         onPageBuild: _onPageBuild,
         onDragStart: _onDragStart,
@@ -434,6 +580,50 @@ class _AssetPageState extends ConsumerState<AssetPage> {
 
     final viewIntentFilePath = timelineOrigin == TimelineOrigin.deepLink ? ref.watch(viewIntentFilePathProvider) : null;
 
+    // When a swipe lands on a new page, wait a beat before the HDR overlay fades
+    // in so the landing feels calm instead of popping immediately. Settling back
+    // on the same page keeps the overlay (and its brightness) untouched.
+    if (_wasCurrent == false && isCurrent) {
+      _hdrSuspended = true;
+      _resumeHdrSoon();
+    }
+    _wasCurrent = isCurrent;
+
+    final showingControls = ref.watch(assetViewerProvider.select((s) => s.showingControls));
+    final routeUncovered = _route?.secondaryAnimation?.isDismissed ?? true;
+    // Dialogs/bottom sheets are PopupRoutes that never run secondaryAnimation,
+    // but they do drop isCurrent; the overlay must yield so they stay visible.
+    final routeTopmost = _route?.isCurrent ?? true;
+    String? hdrSource;
+    if (isCurrent &&
+        displayAsset.isImage &&
+        !isPlayingMotionVideo &&
+        viewIntentFilePath == null &&
+        !_showingDetails &&
+        !showingOcr &&
+        (stackChildren == null || stackChildren.isEmpty) &&
+        _routeIdle &&
+        routeUncovered &&
+        routeTopmost &&
+        !ref.watch(viewerMenuOpenProvider) &&
+        !_isZoomed) {
+      hdrSource = ref.watch(ultraHdrSourceProvider(displayAsset)).valueOrNull;
+    }
+    final hdrActive = hdrSource != null && !_hdrSuspended;
+    if (isCurrent) {
+      _syncHdrChrome(showingControls);
+    }
+    _syncHdrSession(hdrActive ? hdrSource : null);
+
+    if (!hdrActive && _nativeZoomed) {
+      _nativeZoomed = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _viewer.setZoomed(false);
+        }
+      });
+    }
+
     return Stack(
       children: [
         SingleChildScrollView(
@@ -454,6 +644,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
                     isCurrent: isCurrent,
                     isPlayingMotionVideo: isPlayingMotionVideo,
                     localFilePath: viewIntentFilePath,
+                    hdrActive: hdrActive,
                   ),
                 ),
                 if (showingOcr && displayAsset.width != null && displayAsset.height != null)

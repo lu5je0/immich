@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/providers/app_settings.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -17,6 +18,11 @@ class ImageViewerQualitySetting extends HookConsumerWidget {
       ref.read(settingsProvider).write(.imageLoadOriginal, isOriginal.value);
     });
 
+    final isUltraHdr = useState(ref.read(appConfigProvider).image.ultraHdr);
+    useValueChanged<bool, void>(isUltraHdr.value, (_, __) {
+      ref.read(settingsProvider).write(.imageUltraHdr, isUltraHdr.value);
+    });
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -31,6 +37,12 @@ class ImageViewerQualitySetting extends HookConsumerWidget {
           subtitle: "setting_image_viewer_original_subtitle".t(context: context),
           onChanged: (_) => ref.invalidate(appSettingsServiceProvider),
         ),
+        if (CurrentPlatform.isAndroid)
+          SettingsSwitchListTile(
+            valueNotifier: isUltraHdr,
+            title: "setting_image_viewer_ultra_hdr_title".t(context: context),
+            subtitle: "setting_image_viewer_ultra_hdr_subtitle".t(context: context),
+          ),
       ],
     );
   }

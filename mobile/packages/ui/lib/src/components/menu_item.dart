@@ -10,6 +10,8 @@ class ImmichMenu extends StatefulWidget {
   final MenuStyle? style;
   final bool consumeOutsideTap;
   final Widget? child;
+  final VoidCallback? onOpen;
+  final VoidCallback? onClose;
 
   const ImmichMenu({
     super.key,
@@ -18,6 +20,8 @@ class ImmichMenu extends StatefulWidget {
     this.style,
     this.consumeOutsideTap = false,
     this.child,
+    this.onOpen,
+    this.onClose,
   });
 
   @override
@@ -35,6 +39,8 @@ class _ImmichMenuState extends State<ImmichMenu> {
         controller: _controller,
         style: widget.style,
         consumeOutsideTap: widget.consumeOutsideTap,
+        onOpen: widget.onOpen,
+        onClose: widget.onClose,
         menuChildren: widget.children,
         builder: widget.builder,
         child: widget.child,

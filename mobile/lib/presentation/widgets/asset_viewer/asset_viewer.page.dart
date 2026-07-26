@@ -18,9 +18,11 @@ import 'package:immich_mobile/presentation/widgets/action_buttons/download_statu
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_page.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_preloader.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_stack.provider.dart';
+import 'package:immich_mobile/presentation/widgets/asset_viewer/ultra_hdr_image.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/viewer_bottom_app_bar.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/viewer_top_app_bar.widget.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/ultra_hdr.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/current_album.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/timeline.provider.dart';
@@ -94,6 +96,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
 
   late int _currentPage = widget.initialIndex;
   late int _totalAssets = ref.read(timelineServiceProvider).totalAssets;
+  double? _scrollStartPixels;
 
   StreamSubscription? _reloadSubscription;
   KeepAliveLink? _stackChildrenKeepAlive;
@@ -150,14 +153,31 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
   // the page to be dragged more than half way whilst keeping the current video
   // playing, and preventing the video on the next page from becoming ready
   // unnecessarily.
-  bool _onScrollEnd(ScrollEndNotification notification) {
+  bool _onScrollNotification(ScrollNotification notification) {
     if (notification.depth != 0) {
       return false;
     }
 
-    final page = _pageController.page?.round();
-    if (page != null && page != _currentPage) {
-      _onAssetChanged(page);
+    if (notification is ScrollStartNotification) {
+      _scrollStartPixels = notification.metrics.pixels;
+      ref.read(viewerPageScrollingProvider.notifier).state = true;
+    } else if (notification is ScrollUpdateNotification) {
+      // Keep the native HDR overlay sliding in lockstep with the page swipe so
+      // the current photo keeps its HDR brightness while being dragged away.
+      final start = _scrollStartPixels;
+      if (start != null) {
+        final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+        unawaited(UltraHdrSession.setSwipeOffset((notification.metrics.pixels - start) * devicePixelRatio));
+      }
+    } else if (notification is ScrollEndNotification) {
+      _scrollStartPixels = null;
+      ref.read(viewerPageScrollingProvider.notifier).state = false;
+      final page = _pageController.page?.round();
+      if (page != null && page != _currentPage) {
+        _onAssetChanged(page);
+      } else {
+        unawaited(UltraHdrSession.setSwipeOffset(0));
+      }
     }
     return false;
   }
@@ -346,8 +366,8 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
         bottomNavigationBar: const ViewerBottomAppBar(),
         body: Stack(
           children: [
-            NotificationListener<ScrollEndNotification>(
-              onNotification: _onScrollEnd,
+            NotificationListener<ScrollNotification>(
+              onNotification: _onScrollNotification,
               child: PhotoViewGestureDetectorScope(
                 axis: Axis.horizontal,
                 child: PageView.builder(

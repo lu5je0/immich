@@ -4,6 +4,7 @@ import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/ultra_hdr.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/current_album.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/setting.provider.dart';
@@ -54,6 +55,8 @@ class ViewerKebabMenu extends ConsumerWidget {
 
     return ImmichMenu(
       consumeOutsideTap: true,
+      onOpen: () => ref.read(viewerMenuOpenProvider.notifier).state = true,
+      onClose: () => ref.read(viewerMenuOpenProvider.notifier).state = false,
       style: MenuStyle(
         backgroundColor: WidgetStatePropertyAll(context.themeData.scaffoldBackgroundColor),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.grey),

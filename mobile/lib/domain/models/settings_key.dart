@@ -17,6 +17,7 @@ enum SettingsKey<T> {
   // Image
   imagePreferRemote<bool>(),
   imageLoadOriginal<bool>(),
+  imageUltraHdr<bool>(),
 
   // Viewer
   viewerLoopVideo<bool>(),

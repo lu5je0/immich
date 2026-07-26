@@ -1,0 +1,72 @@
+# AGENTS.md
+
+Guidance for AI coding agents working in this fork of Immich.
+
+## Repository layout
+
+- `mobile/` — Flutter app (Android/iOS). Main work area of this fork.
+- `server/` — NestJS API server. `web/` — SvelteKit web app. `i18n/` — translations.
+- `.env/` — local-only build toolchain (Flutter SDK, Android SDK); gitignored, do not commit.
+
+## Fork-specific feature: Android Ultra HDR viewer
+
+This fork adds Google Photos-style Ultra HDR (JPEG + gain map) rendering to the
+Android asset viewer. Flutter cannot render HDR, so the photo is drawn by a
+native window-level overlay above FlutterView (pure HWUI, which applies the
+gain map when `window.colorMode = COLOR_MODE_HDR`).
+
+Key files:
+
+- `mobile/android/app/src/main/kotlin/app/alextran/immich/hdr/`
+  - `UltraHdrPlugin.kt` — MethodChannel `immich_ultra_hdr_overlay`; HDR colorMode
+    ref-counting and gradual brightness via `desiredHdrHeadroom` ramp (log-space,
+    ease-in-out). Never fade HDR views via alpha: offscreen layers flatten the
+    gain map.
+  - `UltraHdrImageView.kt` — `HdrOverlayLayout` (overlay attached to
+    `android.R.id.content`, touch arbitration: pinch/double-tap/zoomed are native,
+    everything else forwarded verbatim to FlutterView) and `ZoomableHdrView`
+    (matrix zoom/pan/fling, chrome clipRect so Flutter bars show through).
+  - `HdrImagesImpl.kt` — Pigeon `HdrImageApi`: gain-map probing, remote original
+    download cache (`cacheDir/uhdr`, sha1 keys, `nohdr` markers, 512 MB LRU).
+- `mobile/lib/presentation/widgets/asset_viewer/ultra_hdr_image.widget.dart` —
+  Dart bridge (`UltraHdrSession`).
+- `mobile/lib/providers/asset_viewer/ultra_hdr.provider.dart` — source resolution
+  provider and viewer state providers.
+- `mobile/lib/presentation/widgets/asset_viewer/asset_page.widget.dart` — gating:
+  the overlay only shows when the page is current, route is idle/topmost, and no
+  details/OCR/stack/dialog/menu covers it. Anything drawn by Flutter above the
+  photo must gate the overlay off (dialogs drop `route.isCurrent`; MenuAnchor
+  overlays must signal via `viewerMenuOpenProvider`).
+- `mobile/pigeon/hdr_image_api.dart` — Pigeon definition; generated files are
+  `mobile/lib/platform/hdr_image_api.g.dart` and `hdr/HdrImages.g.kt`.
+
+Behavioral contract (validated on a 120 Hz Android 16 device):
+
+- Page swipes are Flutter-driven; the overlay slides in lockstep via
+  `setSwipeOffset` so the outgoing photo keeps HDR brightness.
+- Landing on a new page waits ~350 ms, then the photo fades in and highlights
+  ramp up over ~800 ms.
+- Do NOT reintroduce platform views for the photo: hybrid composition is
+  pathologically slow during Flutter animations on test hardware.
+
+## Mobile build & test
+
+```sh
+export JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.2-tem
+export ANDROID_HOME=<repo>/.env/android-sdk
+export PATH="<repo>/.env/flutter/bin:$JAVA_HOME/bin:$PATH"
+cd mobile
+dart analyze <changed files>
+flutter build apk --release --target-platform android-arm64 --split-per-abi
+adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+Debug builds are too slow for perf testing; always verify HDR/scroll smoothness
+with a release build on a real device.
+
+## Conventions
+
+- Commit style: conventional commits (`feat(mobile): ...`, `fix: ...`).
+- iOS must remain untouched by HDR work; all HDR code paths are Android-gated
+  (`CurrentPlatform.isAndroid`, `@RequiresApi(34)`).
+- New user-facing strings go through `i18n/en.json`.
