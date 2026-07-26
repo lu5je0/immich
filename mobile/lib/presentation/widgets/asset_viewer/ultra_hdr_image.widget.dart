@@ -53,12 +53,32 @@ abstract final class UltraHdrSession {
     }
   }
 
-  static Future<void> setSwipeOffset(double offsetPx) async {
-    try {
-      await _channel.invokeMethod('setSwipeOffset', offsetPx);
-    } catch (_) {
-      // Missing implementation must never break the viewer.
+  static double? _pendingSwipeOffset;
+  static bool _sendingSwipeOffset = false;
+
+  /// Coalesces bursts of scroll updates: while one message is in flight only
+  /// the latest offset is kept, so the platform channel never floods the
+  /// Android main thread mid-swipe.
+  static void setSwipeOffset(double offsetPx) {
+    _pendingSwipeOffset = offsetPx;
+    if (_sendingSwipeOffset) {
+      return;
     }
+    _sendingSwipeOffset = true;
+    Future(() async {
+      try {
+        while (_pendingSwipeOffset != null) {
+          final offset = _pendingSwipeOffset!;
+          _pendingSwipeOffset = null;
+          await _channel.invokeMethod('setSwipeOffset', offset);
+        }
+      } catch (_) {
+        _pendingSwipeOffset = null;
+        // Missing implementation must never break the viewer.
+      } finally {
+        _sendingSwipeOffset = false;
+      }
+    });
   }
 
   static Future<void> setChrome({required int top, required int bottom, required bool visible}) async {

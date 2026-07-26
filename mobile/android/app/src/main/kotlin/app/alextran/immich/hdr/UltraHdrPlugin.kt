@@ -1,25 +1,22 @@
 package app.alextran.immich.hdr
 
-import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
-import android.view.animation.AccelerateDecelerateInterpolator
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-private const val HEADROOM_RAMP_MS = 800L
-// Covers the latency of the colorMode switch so the ramp starts once HDR compositing is live.
-private const val HEADROOM_RAMP_DELAY_MS = 100L
 private const val MAX_DESIRED_HEADROOM = 8f
-// Keep HDR active across the brief overlap when swiping between two HDR assets.
-private const val RELEASE_DELAY_MS = 300L
+// Exiting and re-entering HDR color mode reconfigures the window surface (a visible
+// hitch), so keep HDR alive long enough to cover a page-swipe settle plus the delayed
+// overlay resume (~350ms) and decode.
+private const val RELEASE_DELAY_MS = 1000L
 
 class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler {
   private var channel: MethodChannel? = null
@@ -119,7 +116,6 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
     private val mainHandler = Handler(Looper.getMainLooper())
     private var activity: Activity? = null
     private var hdrRefs = 0
-    private var headroomAnimator: ValueAnimator? = null
     private val releaseRunnable = Runnable {
       if (hdrRefs == 0) {
         exitHdrMode()
@@ -132,14 +128,8 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
         hdrRefs++
         if (hdrRefs == 1) {
           enterHdrMode()
-        } else {
-          startHeadroomRamp()
         }
       }
-    }
-
-    fun rampHeadroom() {
-      mainHandler.post { startHeadroomRamp() }
     }
 
     fun releaseHdr() {
@@ -153,45 +143,21 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
 
     private fun enterHdrMode() {
       val window = activity?.window ?: return
-      // Clamp headroom to SDR before enabling HDR compositing; an unset (0 = unlimited)
-      // headroom would pop to full brightness the instant colorMode switches.
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-        headroomAnimator?.cancel()
-        window.desiredHdrHeadroom = 1f
-      }
       if (window.colorMode != ActivityInfo.COLOR_MODE_HDR) {
         window.colorMode = ActivityInfo.COLOR_MODE_HDR
       }
-      startHeadroomRamp()
-    }
-
-    // Ramp the headroom so highlights brighten gradually instead of popping.
-    private fun startHeadroomRamp() {
-      val window = activity?.window ?: return
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
-      if (window.colorMode != ActivityInfo.COLOR_MODE_HDR) return
-      headroomAnimator?.cancel()
-      window.desiredHdrHeadroom = 1f
-      // Animate in log space so perceived brightness rises evenly, with ease-in-out.
-      headroomAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-        duration = HEADROOM_RAMP_MS
-        startDelay = HEADROOM_RAMP_DELAY_MS
-        interpolator = AccelerateDecelerateInterpolator()
-        addUpdateListener {
-          val t = it.animatedValue as Float
-          window.desiredHdrHeadroom = Math.pow(MAX_DESIRED_HEADROOM.toDouble(), t.toDouble()).toFloat()
-        }
-        start()
+      // Headroom stays pinned; per-photo gradual brightening is done by animating
+      // the photo's own gainmap ratios (immune to the system's slow smoothing of
+      // headroom changes, which caused visible brightness flicker between photos).
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        window.desiredHdrHeadroom = MAX_DESIRED_HEADROOM
       }
     }
 
     private fun exitHdrMode() {
       val window = activity?.window ?: return
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-        headroomAnimator?.cancel()
-        headroomAnimator = null
-        // Keep the clamp at 1f so the next HDR entry starts dark instead of unlimited.
-        window.desiredHdrHeadroom = 1f
+        window.desiredHdrHeadroom = 0f
       }
       window.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
     }

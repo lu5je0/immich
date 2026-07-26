@@ -167,7 +167,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
       final start = _scrollStartPixels;
       if (start != null) {
         final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-        unawaited(UltraHdrSession.setSwipeOffset((notification.metrics.pixels - start) * devicePixelRatio));
+        UltraHdrSession.setSwipeOffset((notification.metrics.pixels - start) * devicePixelRatio);
       }
     } else if (notification is ScrollEndNotification) {
       _scrollStartPixels = null;
@@ -176,7 +176,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
       if (page != null && page != _currentPage) {
         _onAssetChanged(page);
       } else {
-        unawaited(UltraHdrSession.setSwipeOffset(0));
+        UltraHdrSession.setSwipeOffset(0);
       }
     }
     return false;

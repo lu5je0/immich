@@ -217,12 +217,12 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     }
 
     if (_dragIntent == _DragIntent.none) {
-      _dragIntent = switch ((details.globalPosition - _dragStart!.globalPosition).dy) {
-        < 0 => _DragIntent.scroll,
-        > 0 => _DragIntent.dismiss,
-        _ => _DragIntent.none,
-      };
-      if (_dragIntent != _DragIntent.none) {
+      // Require a clearly vertical movement before committing: near-horizontal
+      // swipes carry a few stray pixels of dy, and treating those as a dismiss
+      // needlessly suspends the HDR overlay (visible brightness flicker).
+      final delta = details.globalPosition - _dragStart!.globalPosition;
+      if (delta.dy.abs() > kTouchSlop && delta.dy.abs() > delta.dx.abs()) {
+        _dragIntent = delta.dy < 0 ? _DragIntent.scroll : _DragIntent.dismiss;
         _suspendHdr();
       }
     }

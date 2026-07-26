@@ -29,6 +29,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 private const val FADE_IN_MS = 150L
+private const val GAIN_RAMP_MS = 800L
+private const val GAIN_RAMP_DELAY_MS = 100L
 private const val MAX_TEXTURE_DIM = 4096
 private const val MAX_SCALE = 8f
 private const val DOUBLE_TAP_SCALE = 3f
@@ -156,10 +158,9 @@ class HdrOverlayLayout(context: Context) : FrameLayout(context) {
       if (!hdrAcquired) {
         hdrAcquired = true
         UltraHdrPlugin.acquireHdr()
-      } else {
-        // Re-run the headroom ramp so highlights brighten gradually per photo.
-        UltraHdrPlugin.rampHeadroom()
       }
+      // Per-photo gradual brightening via the photo's own gainmap ratios.
+      zoomView.startGainRamp()
     }
     zoomView.animate().alpha(1f).setDuration(FADE_IN_MS).start()
   }
@@ -304,6 +305,7 @@ class ZoomableHdrView(context: Context) : View(context) {
   private val scroller = OverScroller(context)
   private var flingRunnable: Runnable? = null
   private var zoomAnimator: ValueAnimator? = null
+  private var gainAnimator: ValueAnimator? = null
 
   private val scaleDetector = ScaleGestureDetector(
     context,
@@ -352,6 +354,7 @@ class ZoomableHdrView(context: Context) : View(context) {
   )
 
   fun setImage(image: Bitmap) {
+    gainAnimator?.cancel()
     bitmap = image
     suppMatrix.reset()
     updateBaseMatrix()
@@ -360,9 +363,48 @@ class ZoomableHdrView(context: Context) : View(context) {
   fun clearImage() {
     cancelFling()
     zoomAnimator?.cancel()
+    gainAnimator?.cancel()
     bitmap = null
     resetZoom()
     invalidate()
+  }
+
+  // Gradually brightens the highlights by animating the exponent applied to the
+  // photo's own gainmap ratios (t=0 -> pure SDR, t=1 -> full gain). The window
+  // headroom stays pinned, so this is deterministic per photo - unlike
+  // desiredHdrHeadroom changes, which the system smooths on its own schedule.
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  fun startGainRamp() {
+    val image = bitmap ?: return
+    val gainmap = image.gainmap ?: return
+    val base = baseRatios.getOrPut(image) { Pair(gainmap.ratioMin.clone(), gainmap.ratioMax.clone()) }
+    gainAnimator?.cancel()
+    applyGain(gainmap, base, 0f)
+    invalidate()
+    gainAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = GAIN_RAMP_MS
+      startDelay = GAIN_RAMP_DELAY_MS
+      interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+      addUpdateListener {
+        applyGain(gainmap, base, it.animatedValue as Float)
+        invalidate()
+      }
+      start()
+    }
+  }
+
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  private fun applyGain(gainmap: android.graphics.Gainmap, base: Pair<FloatArray, FloatArray>, t: Float) {
+    fun pow(v: Float) = Math.pow(v.toDouble(), t.toDouble()).toFloat()
+    val (minR, maxR) = base
+    gainmap.setRatioMin(pow(minR[0]), pow(minR[1]), pow(minR[2]))
+    gainmap.setRatioMax(pow(maxR[0]), pow(maxR[1]), pow(maxR[2]))
+  }
+
+  private companion object {
+    // Pristine gainmap ratios per bitmap: cached bitmaps may be re-displayed after an
+    // interrupted ramp left their gainmap scaled, so the originals must be remembered.
+    val baseRatios = java.util.WeakHashMap<Bitmap, Pair<FloatArray, FloatArray>>()
   }
 
   fun resetZoom() {
