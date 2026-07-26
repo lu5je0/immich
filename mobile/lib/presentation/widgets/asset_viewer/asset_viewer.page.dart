@@ -202,6 +202,9 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     }
 
     AssetViewer._setAsset(ref, asset);
+    // Keep the grid positioned on the viewed asset so the closing hero
+    // animation always has its destination tile laid out.
+    EventStream.shared.emit(ScrollToAssetIndexEvent(ref.read(timelineServiceProvider), index));
     _preloader.preload(index, context.sizeData);
     _handleCasting();
     _stackChildrenKeepAlive?.close();

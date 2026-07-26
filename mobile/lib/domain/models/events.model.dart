@@ -15,6 +15,18 @@ class ScrollToDateEvent extends Event {
   const ScrollToDateEvent(this.date);
 }
 
+/// Emitted by the asset viewer when the user swipes to another asset, so the
+/// timeline grid beneath can keep that asset's tile laid out - both to land
+/// the closing hero animation on the right tile and to leave the grid
+/// positioned at the viewed photo. [scope] is the TimelineService driving the
+/// viewer; only the grid sharing that service should react.
+class ScrollToAssetIndexEvent extends Event {
+  final Object scope;
+  final int index;
+
+  const ScrollToAssetIndexEvent(this.scope, this.index);
+}
+
 // Asset Viewer Events
 class ViewerShowDetailsEvent extends Event {
   const ViewerShowDetailsEvent();

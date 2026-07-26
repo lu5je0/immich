@@ -143,6 +143,7 @@ class _SliverTimeline extends ConsumerStatefulWidget {
 class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBindingObserver {
   late final ScrollController _scrollController;
   StreamSubscription? _eventSubscription;
+  final GlobalKey _sliverListKey = GlobalKey();
 
   // Drag selection state
   bool _dragging = false;
@@ -192,11 +193,50 @@ class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBi
         _scrollToTop();
       case ScrollToDateEvent scrollToDateEvent:
         _scrollToDate(scrollToDateEvent.date);
+      case ScrollToAssetIndexEvent scrollToAsset:
+        if (identical(scrollToAsset.scope, ref.read(timelineServiceProvider))) {
+          _scrollToAssetIndex(scrollToAsset.index);
+        }
       case TimelineReloadEvent():
         setState(() {});
       default:
         break;
     }
+  }
+
+  // Keeps the tile of the asset currently shown in the viewer laid out so the
+  // closing hero animation can land on it, and leaves the grid positioned at
+  // the viewed photo, centered in the viewport.
+  void _scrollToAssetIndex(int assetIndex) {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    final segments = ref.read(timelineSegmentProvider).valueOrNull;
+    if (segments == null) {
+      return;
+    }
+    final targetSegment = segments.lastWhereOrNull((segment) => segment.firstAssetIndex <= assetIndex);
+    if (targetSegment == null) {
+      return;
+    }
+    final assetIndexInSegment = assetIndex - targetSegment.firstAssetIndex;
+    final columnCount = ref.read(timelineArgsProvider).columnCount;
+    final rowIndexInSegment = (assetIndexInSegment / columnCount).floor();
+    final targetRowIndex = targetSegment.firstIndex + 1 + rowIndexInSegment;
+    final targetOffset = targetSegment.indexToLayoutOffset(targetRowIndex);
+    final rowExtent = targetSegment.indexToLayoutOffset(targetRowIndex + 1) - targetOffset;
+
+    // Segment offsets are relative to the grid sliver; slivers before it
+    // (app bar, top sliver widgets) shift the absolute scroll position.
+    var precedingExtent = 0.0;
+    final sliverRender = _sliverListKey.currentContext?.findRenderObject();
+    if (sliverRender is RenderSliver && sliverRender.geometry != null) {
+      precedingExtent = sliverRender.constraints.precedingScrollExtent;
+    }
+
+    final position = _scrollController.position;
+    final centered = precedingExtent + targetOffset - (position.viewportDimension - rowExtent) / 2;
+    _scrollController.jumpTo(centered.clamp(0.0, position.maxScrollExtent));
   }
 
   void _restoreAssetPosition(_) {
@@ -422,6 +462,7 @@ class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBi
                   if (isSelectionMode) const SelectionSliverAppBar() else if (widget.appBar != null) widget.appBar!,
                   if (widget.topSliverWidget != null) widget.topSliverWidget!,
                   _SliverSegmentedList(
+                    key: _sliverListKey,
                     segments: segments,
                     delegate: SliverChildBuilderDelegate(
                       (ctx, index) {
@@ -523,7 +564,7 @@ class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBi
 class _SliverSegmentedList extends SliverMultiBoxAdaptorWidget {
   final List<Segment> _segments;
 
-  const _SliverSegmentedList({required this._segments, required super.delegate});
+  const _SliverSegmentedList({super.key, required this._segments, required super.delegate});
 
   @override
   _RenderSliverTimelineBoxAdaptor createRenderObject(BuildContext context) =>

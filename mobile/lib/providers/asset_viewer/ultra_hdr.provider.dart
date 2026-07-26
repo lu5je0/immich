@@ -30,6 +30,12 @@ final viewerPageScrollingProvider = StateProvider.autoDispose<bool>((_) => false
 /// overlay must be told explicitly to yield beneath them.
 final viewerMenuOpenProvider = StateProvider<bool>((_) => false);
 
+/// Measured height of the viewer's bottom bar (gradient scrim included). The
+/// native HDR overlay must leave exactly this strip unpainted; a fixed guess
+/// would cover part of the scrim, which then flashes whenever the overlay
+/// hides and re-shows around a page switch.
+final viewerBottomBarHeightProvider = StateProvider<double>((_) => 0);
+
 /// Resolves a native render source (content URI or cached file path) when the
 /// asset is an Ultra HDR image, or null otherwise. Only watched for the
 /// current viewer page, so fast page swipes cancel the request on dispose.

@@ -5,20 +5,39 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/ocr.provider.dart';
 
-class OcrToggleButton extends ConsumerWidget {
+class OcrToggleButton extends ConsumerStatefulWidget {
   final BaseAsset asset;
   const OcrToggleButton({super.key, required this.asset});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final asset = this.asset;
-    final hasOcr = asset is RemoteAsset && ref.watch(ocrAssetProvider(asset.id)).valueOrNull?.isNotEmpty == true;
+  ConsumerState<OcrToggleButton> createState() => _OcrToggleButtonState();
+}
+
+class _OcrToggleButtonState extends ConsumerState<OcrToggleButton> {
+  // ocrAssetProvider resolves async on every asset change; dropping to "no OCR"
+  // while it loads makes the button blink out and back in mid-swipe. Keep the
+  // last known state until the new asset's result actually arrives.
+  bool _hasOcr = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = widget.asset;
+    if (asset is! RemoteAsset) {
+      _hasOcr = false;
+    } else {
+      final ocr = ref.watch(ocrAssetProvider(asset.id));
+      if (!ocr.isLoading) {
+        _hasOcr = ocr.valueOrNull?.isNotEmpty == true;
+      }
+    }
     final showingOcr = ref.watch(assetViewerProvider.select((s) => s.showingOcr));
 
     return AnimatedSwitcher(
       duration: Durations.short4,
-      child: !hasOcr
-          ? const SizedBox.shrink()
+      child: !_hasOcr
+          // Keep the button's footprint so the bottom bar (and its gradient
+          // scrim) never changes height between assets.
+          ? const SizedBox(height: 50)
           : Align(
               alignment: Alignment.centerRight,
               child: Padding(

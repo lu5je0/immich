@@ -67,6 +67,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
   bool _nativeZoomed = false;
   String? _shownHdrSource;
   bool? _sentChromeVisible;
+  int? _sentChromeBottom;
   bool? _wasCurrent;
   bool _routeIdle = false;
   Timer? _routeIdleTimer;
@@ -403,7 +404,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
 
   void _resumeHdrSoon() {
     _hdrResumeTimer?.cancel();
-    _hdrResumeTimer = Timer(const Duration(milliseconds: 350), () {
+    _hdrResumeTimer = Timer(const Duration(milliseconds: 50), () {
       if (mounted && _hdrSuspended) {
         setState(() => _hdrSuspended = false);
       }
@@ -442,15 +443,22 @@ class _AssetPageState extends ConsumerState<AssetPage> {
   }
 
   void _syncHdrChrome(bool controlsVisible) {
-    if (_sentChromeVisible == controlsVisible) {
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final padding = MediaQuery.paddingOf(context);
+    // Use the measured bottom bar height (buttons + gradient scrim) so the
+    // overlay's clip matches exactly; covering part of the scrim makes it
+    // flash when the overlay hides and re-shows around a page switch.
+    final measuredBarHeight = ref.read(viewerBottomBarHeightProvider);
+    final bottomHeight = measuredBarHeight > 0 ? measuredBarHeight : padding.bottom + 80;
+    final bottomPx = (bottomHeight * devicePixelRatio).round();
+    if (_sentChromeVisible == controlsVisible && _sentChromeBottom == bottomPx) {
       return;
     }
     _sentChromeVisible = controlsVisible;
-    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-    final padding = MediaQuery.paddingOf(context);
+    _sentChromeBottom = bottomPx;
     UltraHdrSession.setChrome(
       top: ((padding.top + kToolbarHeight) * devicePixelRatio).round(),
-      bottom: ((padding.bottom + 80) * devicePixelRatio).round(),
+      bottom: bottomPx,
       visible: controlsVisible,
     );
   }
@@ -611,6 +619,8 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     }
     final hdrActive = hdrSource != null && !_hdrSuspended;
     if (isCurrent) {
+      // Rebuild when the measured bottom bar height lands so the clip updates.
+      ref.watch(viewerBottomBarHeightProvider);
       _syncHdrChrome(showingControls);
     }
     _syncHdrSession(hdrActive ? hdrSource : null);
