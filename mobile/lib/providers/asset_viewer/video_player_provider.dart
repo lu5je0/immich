@@ -60,6 +60,24 @@ class VideoPlayerNotifier extends StateNotifier<VideoPlayerState> {
     _controller = controller;
   }
 
+  void detachController() {
+    _controller = null;
+  }
+
+  /// Seeks the (possibly freshly created) player back to the tracked position,
+  /// used after the platform view is remounted following a page swipe.
+  Future<void> restorePosition() async {
+    if (_controller == null || state.position <= Duration.zero) {
+      return;
+    }
+
+    try {
+      await _controller!.seekTo(state.position.inMilliseconds);
+    } catch (e) {
+      _log.severe('Error restoring video position: $e');
+    }
+  }
+
   Future<void> load(VideoSource source) async {
     _startBufferingTimer();
     try {
@@ -147,6 +165,10 @@ class VideoPlayerNotifier extends StateNotifier<VideoPlayerState> {
     _holdStatus = state.status;
     pause();
   }
+
+  /// True if [hold] captured an actively playing state.
+  bool get wasHeldPlaying =>
+      _holdStatus == VideoPlaybackStatus.playing || _holdStatus == VideoPlaybackStatus.buffering;
 
   /// Restores playback to the status before [hold] was called.
   void release() {

@@ -10,6 +10,7 @@ import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/storage.repository.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/is_motion_video_playing.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/ultra_hdr.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/video_player_provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
@@ -46,6 +47,10 @@ class _NativeVideoViewerState extends ConsumerState<NativeVideoViewer> with Widg
   Timer? _loadTimer;
   bool _isVideoReady = false;
   bool _shouldPlayOnForeground = true;
+  // The player's platform view (hybrid composition, one VirtualDisplay each) is
+  // expensive to composite per frame and to create/destroy, so it is only mounted
+  // once the page has settled as current; swipes run without any platform view.
+  bool _mountPlayerView = false;
 
   VideoPlayerNotifier get _notifier => ref.read(videoPlayerProvider(widget.asset.heroTag).notifier);
 
@@ -54,24 +59,55 @@ class _NativeVideoViewerState extends ConsumerState<NativeVideoViewer> with Widg
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _videoSource = _createSource();
+    if (widget.isCurrent) {
+      _scheduleMount();
+    }
   }
 
   @override
   void didUpdateWidget(NativeVideoViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (widget.isCurrent == oldWidget.isCurrent || _controller == null) {
+    if (widget.isCurrent == oldWidget.isCurrent) {
       return;
     }
 
     if (!widget.isCurrent) {
       _loadTimer?.cancel();
       _notifier.pause();
+      _unmountPlayer();
       return;
     }
 
     // Prevent unnecessary loading when swiping between assets.
-    _loadTimer = Timer(const Duration(milliseconds: 200), _loadVideo);
+    _scheduleMount();
+  }
+
+  // Mounts the platform view a beat after the page settles, so its VirtualDisplay
+  // creation never lands on a swipe frame.
+  void _scheduleMount() {
+    if (_mountPlayerView) {
+      return;
+    }
+    _loadTimer?.cancel();
+    _loadTimer = Timer(const Duration(milliseconds: 200), () {
+      if (mounted && widget.isCurrent && !_mountPlayerView) {
+        setState(() => _mountPlayerView = true);
+      }
+    });
+  }
+
+  // Releases the player (and its VirtualDisplay); playback status and position
+  // survive in the provider and are restored when the view is remounted.
+  void _unmountPlayer() {
+    if (!_mountPlayerView) {
+      return;
+    }
+    _removeListeners();
+    _notifier.detachController();
+    _controller = null;
+    _isVideoReady = false;
+    setState(() => _mountPlayerView = false);
   }
 
   @override
@@ -214,12 +250,19 @@ class _NativeVideoViewerState extends ConsumerState<NativeVideoViewer> with Widg
 
     setState(() => _isVideoReady = true);
 
+    // Playback position and status survive an unmount (page swipe) in the
+    // provider; restore them on the freshly created player.
+    await _notifier.restorePosition();
+
     if (ref.read(assetViewerProvider).showingDetails) {
       return;
     }
 
+    final resumePlayback = _notifier.wasHeldPlaying;
+    _notifier.release();
+
     final autoPlayVideo = ref.read(appConfigProvider).viewer.autoPlayVideo;
-    if (autoPlayVideo || widget.asset.isMotionPhoto) {
+    if (!resumePlayback && (autoPlayVideo || widget.asset.isMotionPhoto)) {
       await _notifier.play();
     }
   }
@@ -301,15 +344,32 @@ class _NativeVideoViewerState extends ConsumerState<NativeVideoViewer> with Widg
     final isCasting = ref.watch(castProvider.select((c) => c.isCasting));
     final status = ref.watch(videoPlayerProvider(widget.asset.heroTag).select((v) => v.status));
 
+    // Release the player while the viewer swipes: compositing its platform view
+    // on every frame of a page animation is prohibitively expensive. The view is
+    // remounted once the swipe settles (_scheduleMount).
+    ref.listen(viewerPageScrollingProvider, (_, scrolling) {
+      if (scrolling) {
+        if (_mountPlayerView) {
+          _loadTimer?.cancel();
+          _notifier.hold();
+          _unmountPlayer();
+        }
+      } else if (widget.isCurrent && !_mountPlayerView) {
+        _scheduleMount();
+      }
+    });
+
     return IgnorePointer(
       child: Stack(
         children: [
-          if (!_isVideoReady || widget.asset.isMotionPhoto || isCasting) Center(child: widget.image),
+          if (!(_mountPlayerView && _isVideoReady) || widget.asset.isMotionPhoto || isCasting)
+            Center(child: widget.image),
           if (!isCasting) ...[
-            Visibility.maintain(
-              visible: _isVideoReady,
-              child: NativeVideoPlayerView(onViewReady: _initController),
-            ),
+            if (_mountPlayerView)
+              Visibility.maintain(
+                visible: _isVideoReady,
+                child: NativeVideoPlayerView(onViewReady: _initController),
+              ),
             Center(
               child: AnimatedOpacity(
                 opacity: status == VideoPlaybackStatus.buffering ? 1.0 : 0.0,
