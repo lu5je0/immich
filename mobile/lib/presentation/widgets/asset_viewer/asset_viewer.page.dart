@@ -139,6 +139,10 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     _reloadSubscription?.cancel();
     _stackChildrenKeepAlive?.close();
 
+    // Ends the HDR window-mode session held since the first HDR photo was
+    // shown (page children dispose first, so their overlay clears land before).
+    UltraHdrSession.shutdown();
+
     unawaited(restoreEdgeToEdge());
 
     super.dispose();

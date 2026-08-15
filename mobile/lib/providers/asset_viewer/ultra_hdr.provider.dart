@@ -20,9 +20,8 @@ final ultraHdrSupportedProvider = FutureProvider<bool>((ref) async {
 
 int _nextRequestId = 0;
 
-/// True while the viewer's PageView is actively scrolling. The HDR overlay is a
-/// platform view; transforming it per frame during swipes forces expensive
-/// Flutter<->Android compositor syncs, so it is hidden while this is true.
+/// True while the viewer's PageView is actively scrolling. Reserved for
+/// gating overlay work that must not run mid-swipe.
 final viewerPageScrollingProvider = StateProvider.autoDispose<bool>((_) => false);
 
 /// True while a route-less overlay (e.g. the kebab MenuAnchor) is open above

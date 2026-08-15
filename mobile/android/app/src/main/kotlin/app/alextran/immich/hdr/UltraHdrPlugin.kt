@@ -14,8 +14,10 @@ import io.flutter.plugin.common.MethodChannel
 
 private const val MAX_DESIRED_HEADROOM = 8f
 // Exiting and re-entering HDR color mode reconfigures the window surface (a visible
-// hitch), so keep HDR alive long enough to cover a page-swipe settle plus the delayed
-// overlay resume (~350ms) and decode.
+// hitch). While a viewer session is held, exits are suppressed entirely: pages that
+// don't show an HDR photo (e.g. videos) keep the window in HDR instead of scheduling
+// an exit that would hitch mid-playback. The delayed release then only covers the gap
+// between the session ending and the viewer UI being gone.
 private const val RELEASE_DELAY_MS = 1000L
 
 class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler {
@@ -46,6 +48,16 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
 
       "clear" -> {
         overlay?.clear()
+        result.success(null)
+      }
+
+      "beginSession" -> {
+        beginHdrSession()
+        result.success(null)
+      }
+
+      "endSession" -> {
+        endHdrSession()
         result.success(null)
       }
 
@@ -116,8 +128,9 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
     private val mainHandler = Handler(Looper.getMainLooper())
     private var activity: Activity? = null
     private var hdrRefs = 0
+    private var hdrSessionHeld = false
     private val releaseRunnable = Runnable {
-      if (hdrRefs == 0) {
+      if (hdrRefs == 0 && !hdrSessionHeld) {
         exitHdrMode()
       }
     }
@@ -135,7 +148,27 @@ class UltraHdrPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
     fun releaseHdr() {
       mainHandler.post {
         hdrRefs = maxOf(0, hdrRefs - 1)
+        if (hdrRefs == 0 && !hdrSessionHeld) {
+          mainHandler.postDelayed(releaseRunnable, RELEASE_DELAY_MS)
+        }
+      }
+    }
+
+    // The viewer holds a session from the first HDR photo it shows until it closes,
+    // so swiping onto a video (which clears the overlay) never triggers a window
+    // color mode exit during playback.
+    fun beginHdrSession() {
+      mainHandler.post {
+        hdrSessionHeld = true
+        mainHandler.removeCallbacks(releaseRunnable)
+      }
+    }
+
+    fun endHdrSession() {
+      mainHandler.post {
+        hdrSessionHeld = false
         if (hdrRefs == 0) {
+          mainHandler.removeCallbacks(releaseRunnable)
           mainHandler.postDelayed(releaseRunnable, RELEASE_DELAY_MS)
         }
       }
