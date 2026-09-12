@@ -26,13 +26,13 @@ import 'factories/user_factory.dart';
 
 class RepositoryMocks {
   final localAlbum = LocalAlbumRepositoryStub(MockLocalAlbumRepository());
-  final localAsset = LocalAssetRepositoryStub(MockDriftLocalAssetRepository());
+  final localAsset = LocalAssetRepositoryStub(MockLocalAssetRepository());
   final remoteAsset = RemoteAssetRepositoryStub(MockRemoteAssetRepository());
   final remoteExif = RemoteExifRepositoryStub(MockRemoteExifRepository());
   final trashedAsset = MockTrashedLocalAssetRepository();
-  final toast = MockToastRepository();
   final remoteAlbum = MockRemoteAlbumRepository();
-  final albumApi = MockDriftAlbumApiRepository();
+  final albumApi = MockAlbumApiRepository();
+  final permission = PermissionRepositoryStub(MockPermissionRepository());
 
   final nativeApi = NativeSyncApiStub(MockNativeSyncApi());
   final assetApi = AssetApiRepositoryStub(MockAssetApiRepository());
@@ -56,7 +56,7 @@ class RepositoryMocks {
     assetApi.reset();
     assetMedia.reset();
     download.reset();
-    reset(toast);
+    permission.reset();
     _stubLocalAlbumRepository();
     _stubLocalAssetRepository();
     _stubRemoteAssetRepository();
@@ -65,6 +65,8 @@ class RepositoryMocks {
     _stubAssetApiRepository();
     _stubAssetMediaRepository();
     _stubDownloadRepository();
+    _stubTrashedAssetRepository();
+    _stubPermissionRepository();
   }
 
   void _stubRemoteAssetRepository() {
@@ -83,8 +85,8 @@ class RepositoryMocks {
   }
 
   void _stubLocalAssetRepository() {
-    when(localAsset.reconcileHashesFromCloudId).thenAnswer((_) async => {});
     when(localAsset.updateHashes).thenAnswer((_) async => {});
+    when(localAsset.deleteAssets).thenAnswer((_) async => {});
   }
 
   void _stubNativeSyncApi() {
@@ -96,11 +98,23 @@ class RepositoryMocks {
   }
 
   void _stubAssetMediaRepository() {
+    when(assetMedia.deleteAll).thenAnswer((inv) async => inv.positionalArguments.first as List<String>);
     when(assetMedia.shareAssets).thenAnswer((_) async => 1);
+    when(assetMedia.getOriginalFilename).thenAnswer((_) async => null);
   }
 
   void _stubDownloadRepository() {
     when(download.downloadAllAssets).thenAnswer((_) async => const []);
+  }
+
+  void _stubTrashedAssetRepository() {
+    when(() => trashedAsset.applyTrashedAssets(any())).thenAnswer((_) async => {});
+  }
+
+  void _stubPermissionRepository() {
+    when(permission.getStatus).thenAnswer((_) async => DevicePermissionStatus.denied);
+    when(permission.request).thenAnswer((_) async => DevicePermissionStatus.denied);
+    when(permission.getAndroidSdkVersion).thenAnswer((_) async => 34);
   }
 }
 
@@ -115,6 +129,7 @@ class ServiceMocks {
   final upload = MockForegroundUploadService();
   final cast = MockGCastService();
   final serverInfo = MockServerInfoService();
+  final toast = MockToastService();
 
   ServiceMocks() {
     resetAll();
@@ -132,6 +147,7 @@ class ServiceMocks {
     reset(serverInfo);
     reset(backgroundSync);
     reset(upload);
+    reset(toast);
     _stubUserService();
     _stubPartnerService();
     _stubAssetService();
@@ -148,6 +164,7 @@ class ServiceMocks {
     when(user.watchMyUser).thenAnswer((_) => const Stream.empty());
     when(user.refreshMyUser).thenAnswer((_) async => null);
     when(user.createProfileImage).thenAnswer((_) async => null);
+    when(user.watch).thenAnswer((_) => const Stream.empty());
   }
 
   void _stubPartnerService() {
@@ -160,6 +177,7 @@ class ServiceMocks {
   }
 
   void _stubAssetService() {
+    when(asset.getAsset).thenAnswer((_) async => null);
     when(asset.update).thenAnswer((_) async {});
     when(asset.stack).thenAnswer((_) async {});
     when(asset.unstack).thenAnswer((_) async {});
@@ -167,6 +185,7 @@ class ServiceMocks {
     when(asset.trash).thenAnswer((_) async {});
     when(asset.delete).thenAnswer((_) async {});
     when(asset.applyEdits).thenAnswer((_) async {});
+    when(asset.deleteLocal).thenAnswer((_) async => 0);
   }
 
   void _stubRemoteAlbumService() {
@@ -218,6 +237,8 @@ void _registerFallbacks() {
   registerFallbackValue(ShareAssetType.original);
   registerFallbackValue(const UploadCallbacks());
   registerFallbackValue(_FakeBuildContext());
+  registerFallbackValue(DevicePermissionStatus.granted);
+  registerFallbackValue(DevicePermission.photos);
 }
 
 class _FakeBuildContext extends Fake implements BuildContext {}
@@ -234,13 +255,12 @@ extension type const LocalAlbumRepositoryStub(MockLocalAlbumRepository repo) imp
       () => repo.getAssetsToHash(any());
 }
 
-extension type const LocalAssetRepositoryStub(MockDriftLocalAssetRepository repo)
-    implements Stub<MockDriftLocalAssetRepository> {
-  Future<void> Function() get reconcileHashesFromCloudId =>
-      () => repo.reconcileHashesFromCloudId();
-
+extension type const LocalAssetRepositoryStub(MockLocalAssetRepository repo) implements Stub<MockLocalAssetRepository> {
   Future<void> Function() get updateHashes =>
       () => repo.updateHashes(any());
+
+  Future<void> Function() get deleteAssets =>
+      () => repo.deleteAssets(any());
 }
 
 extension type const RemoteAssetRepositoryStub(MockRemoteAssetRepository repo)
@@ -252,7 +272,7 @@ extension type const RemoteAssetRepositoryStub(MockRemoteAssetRepository repo)
       () => repo.getAssetEdits(any());
 
   Future<void> Function() get update =>
-      () => repo.update(
+      () => repo.updateAssets(
         any(),
         isFavorite: any(named: 'isFavorite'),
         visibility: any(named: 'visibility'),
@@ -262,7 +282,7 @@ extension type const RemoteAssetRepositoryStub(MockRemoteAssetRepository repo)
 
 extension type const RemoteExifRepositoryStub(MockRemoteExifRepository repo) implements Stub<MockRemoteExifRepository> {
   Future<void> Function() get update =>
-      () => repo.update(
+      () => repo.updateExif(
         any(),
         dateTimeOriginal: any(named: 'dateTimeOriginal'),
         timeZone: any(named: 'timeZone'),
@@ -313,9 +333,15 @@ extension type const UserServiceStub(MockUserService service) implements Stub<Mo
 
   Future<String?> Function() get createProfileImage =>
       () => service.createProfileImage(any(), any());
+
+  Stream<User?> Function() get watch =>
+      () => service.watch(any());
 }
 
 extension type const AssetServiceStub(MockAssetService service) implements Stub<MockAssetService> {
+  Future<BaseAsset?> Function() get getAsset =>
+      () => service.getAsset(any());
+
   Future<void> Function() get update =>
       () => service.update(
         any(),
@@ -342,6 +368,9 @@ extension type const AssetServiceStub(MockAssetService service) implements Stub<
 
   Future<void> Function() get applyEdits =>
       () => service.applyEdits(any(), any());
+
+  Future<int> Function() get deleteLocal =>
+      () => service.deleteLocal(any(), trash: any(named: 'trash'));
 }
 
 extension type const RemoteAlbumServiceStub(MockRemoteAlbumService service) implements Stub<MockRemoteAlbumService> {
@@ -377,6 +406,9 @@ extension type const AssetApiRepositoryStub(MockAssetApiRepository api) implemen
 }
 
 extension type const AssetMediaRepositoryStub(MockAssetMediaRepository api) implements Stub<MockAssetMediaRepository> {
+  Future<List<String>> Function() get deleteAll =>
+      () => api.deleteAll(any(), trash: any(named: 'trash'));
+
   Future<int> Function() get shareAssets =>
       () => api.shareAssets(
         any(),
@@ -385,11 +417,25 @@ extension type const AssetMediaRepositoryStub(MockAssetMediaRepository api) impl
         cancelCompleter: any(named: 'cancelCompleter'),
         onAssetDownloadProgress: any(named: 'onAssetDownloadProgress'),
       );
+
+  Future<String?> Function() get getOriginalFilename =>
+      () => api.getOriginalFilename(any());
 }
 
 extension type const DownloadRepositoryStub(MockDownloadRepository repo) implements Stub<MockDownloadRepository> {
   Future<List<bool>> Function() get downloadAllAssets =>
       () => repo.downloadAllAssets(any());
+}
+
+extension type const PermissionRepositoryStub(MockPermissionRepository repo) implements Stub<MockPermissionRepository> {
+  Future<DevicePermissionStatus> Function() get getStatus =>
+      () => repo.getStatus(any());
+
+  Future<DevicePermissionStatus> Function() get request =>
+      () => repo.request(any());
+
+  Future<int> Function() get getAndroidSdkVersion =>
+      () => repo.getAndroidSdkVersion();
 }
 
 extension type const TagServiceStub(MockTagService service) implements Stub<MockTagService> {

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/presentation/widgets/asset_viewer/bottom_bar.widget.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/ultra_hdr.provider.dart';
-import 'package:immich_mobile/presentation/widgets/asset_viewer/bottom_bar.widget.dart';
 
 class ViewerBottomAppBar extends ConsumerStatefulWidget {
   const ViewerBottomAppBar({super.key});
@@ -17,7 +17,8 @@ class _ViewerBottomAppBarState extends ConsumerState<ViewerBottomAppBar> {
   @override
   Widget build(BuildContext context) {
     final showingControls = ref.watch(assetViewerProvider.select((s) => s.showingControls));
-    double opacity = ref.watch(assetViewerProvider.select((s) => s.backgroundOpacity)) * (showingControls ? 1 : 0);
+    final double opacity =
+        ref.watch(assetViewerProvider.select((s) => s.backgroundOpacity)) * (showingControls ? 1 : 0);
 
     // The native HDR overlay leaves the bottom bar strip (buttons + gradient
     // scrim) unpainted; report the real height so the clip matches exactly.

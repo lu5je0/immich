@@ -141,14 +141,14 @@ class _AssetPageState extends ConsumerState<AssetPage> {
   @override
   void dispose() {
     _scrollController.dispose();
-    _scaleBoundarySub?.cancel();
-    _eventSubscription?.cancel();
+    unawaited(_scaleBoundarySub?.cancel());
+    unawaited(_eventSubscription?.cancel());
     _hdrResumeTimer?.cancel();
     _routeIdleTimer?.cancel();
     _route?.animation?.removeStatusListener(_onRouteAnimationStatus);
     _route?.secondaryAnimation?.removeStatusListener(_onSecondaryAnimationStatus);
     if (_shownHdrSource != null) {
-      UltraHdrSession.clear();
+      unawaited(UltraHdrSession.clear());
     }
     _unwireHdrEvents();
     super.dispose();
@@ -174,7 +174,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
       return;
     }
     _viewer.setShowingDetails(true);
-    _scrollController.animateTo(_snapOffset, duration: Durations.medium2, curve: Curves.easeOutCubic);
+    unawaited(_scrollController.animateTo(_snapOffset, duration: Durations.medium2, curve: Curves.easeOutCubic));
   }
 
   bool _willClose(double scrollVelocity) =>
@@ -267,7 +267,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
       case _DragIntent.dismiss:
         const popThreshold = 75.0;
         if (details.localPosition.dy - start!.localPosition.dy > popThreshold) {
-          context.maybePop();
+          unawaited(context.maybePop());
           return;
         }
         _viewController?.animateMultiple(
@@ -360,14 +360,14 @@ class _AssetPageState extends ConsumerState<AssetPage> {
   }
 
   void _listenForScaleBoundaries(PhotoViewControllerBase? controller) {
-    _scaleBoundarySub?.cancel();
+    unawaited(_scaleBoundarySub?.cancel());
     _scaleBoundarySub = null;
     if (controller == null || controller.scaleBoundaries != null) {
       return;
     }
     _scaleBoundarySub = controller.outputStateStream.listen((_) {
       if (controller.scaleBoundaries != null) {
-        _scaleBoundarySub?.cancel();
+        unawaited(_scaleBoundarySub?.cancel());
         _scaleBoundarySub = null;
         if (mounted) {
           setState(() {});
@@ -432,14 +432,14 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     }
     _shownHdrSource = source;
     if (source == null) {
-      UltraHdrSession.clear();
+      unawaited(UltraHdrSession.clear());
       return;
     }
 
     _wireHdrEvents();
     final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
     final targetDimension = (MediaQuery.sizeOf(context).longestSide * devicePixelRatio * 2).round();
-    UltraHdrSession.setSource(source, targetDimension);
+    unawaited(UltraHdrSession.setSource(source, targetDimension));
   }
 
   void _syncHdrChrome(bool controlsVisible) {
@@ -456,10 +456,12 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     }
     _sentChromeVisible = controlsVisible;
     _sentChromeBottom = bottomPx;
-    UltraHdrSession.setChrome(
-      top: ((padding.top + kToolbarHeight) * devicePixelRatio).round(),
-      bottom: bottomPx,
-      visible: controlsVisible,
+    unawaited(
+      UltraHdrSession.setChrome(
+        top: ((padding.top + kToolbarHeight) * devicePixelRatio).round(),
+        bottom: bottomPx,
+        visible: controlsVisible,
+      ),
     );
   }
 
@@ -487,9 +489,15 @@ class _AssetPageState extends ConsumerState<AssetPage> {
     required bool isPlayingMotionVideo,
     required String? localFilePath,
     required bool hdrActive,
+    required Size? remoteThumbnailSize,
   }) {
     final size = context.sizeData;
-    final imageProvider = getFullImageProvider(asset, size: size, localFilePath: localFilePath);
+    final imageProvider = getFullImageProvider(
+      asset,
+      size: size,
+      localFilePath: localFilePath,
+      remoteThumbnailSize: remoteThumbnailSize,
+    );
 
     if (asset.isImage && !isPlayingMotionVideo) {
       return PhotoView(
@@ -511,7 +519,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
         onDragCancel: _onDragCancel,
         onTapUp: _onTapUp,
         onLongPressStart: asset.isMotionPhoto ? _onLongPress : null,
-        errorBuilder: (_, __, ___) => SizedBox(
+        errorBuilder: (_, _, _) => SizedBox(
           width: size.width,
           height: size.height,
           child: Thumbnail.fromAsset(asset: asset, fit: BoxFit.contain),
@@ -551,11 +559,13 @@ class _AssetPageState extends ConsumerState<AssetPage> {
 
   @override
   Widget build(BuildContext context) {
-    final currentAsset = ref.watch(assetViewerProvider.select((s) => s.currentAsset));
+    final (currentAsset, thumbnailSize) = ref.watch(
+      assetViewerProvider.select((s) => (s.currentAsset, s.thumbnailSize)),
+    );
     _showingDetails = ref.watch(assetViewerProvider.select((s) => s.showingDetails));
     final stackIndex = ref.watch(assetViewerProvider.select((s) => s.stackIndex));
     final isPlayingMotionVideo = ref.watch(isPlayingMotionVideoProvider);
-    final timelineOrigin = ref.read(timelineServiceProvider).origin;
+    final timelineOrigin = ref.watch(timelineServiceProvider).origin;
     final showingOcr = ref.watch(assetViewerProvider.select((s) => s.showingOcr));
 
     final asset = _asset;
@@ -655,6 +665,7 @@ class _AssetPageState extends ConsumerState<AssetPage> {
                     isPlayingMotionVideo: isPlayingMotionVideo,
                     localFilePath: viewIntentFilePath,
                     hdrActive: hdrActive,
+                    remoteThumbnailSize: thumbnailSize,
                   ),
                 ),
                 if (showingOcr && displayAsset.width != null && displayAsset.height != null)

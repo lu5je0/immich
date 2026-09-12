@@ -8,15 +8,82 @@ import '../repository_context.dart';
 
 void main() {
   late MediumRepositoryContext ctx;
-  late DriftLocalAssetRepository sut;
+  late LocalAssetRepository sut;
 
   setUp(() {
     ctx = MediumRepositoryContext();
-    sut = DriftLocalAssetRepository(ctx.db);
+    sut = LocalAssetRepository(ctx.db);
   });
 
   tearDown(() async {
     await ctx.dispose();
+  });
+
+  group('get', () {
+    late String userId;
+
+    setUp(() async {
+      final user = await ctx.newUser();
+      userId = user.id;
+      // Owner-scoped queries resolve the current user via authUserEntity.
+      await ctx.newAuthUser(id: userId);
+    });
+
+    test('allows the same checksum to exist for multiple owners (#29973)', () async {
+      const checksum = 'some-shared-checksum';
+      final mine = await ctx.newRemoteAsset(ownerId: userId, checksum: checksum);
+      final partner = await ctx.newUser();
+      await ctx.newRemoteAsset(ownerId: partner.id, checksum: checksum);
+      final local = await ctx.newLocalAsset(checksum: checksum);
+
+      final result = await sut.get(local.id);
+
+      expect(result, isNotNull);
+      expect(result!.id, local.id);
+      // We must explicitly get OUR asset, not the partner's
+      expect(result.remoteId, mine.id);
+    });
+
+    test('reports local-only when only a partner has a remote copy (#29973)', () async {
+      // The current user has NOT uploaded this file; only a partner owns an identical-checksum remote asset
+      const checksum = 'partner-only';
+      final partner = await ctx.newUser();
+      await ctx.newRemoteAsset(ownerId: partner.id, checksum: checksum);
+      final local = await ctx.newLocalAsset(checksum: checksum);
+
+      final result = await sut.get(local.id);
+
+      expect(result, isNotNull);
+      expect(result!.remoteId, isNull);
+      expect(result.storage, AssetState.local);
+    });
+
+    test('allows the current user to have access to multiple remote rows for one checksum (#29973)', () async {
+      // A single user can have their own remote asset, a partner's remote asset, and a local asset all with the same checksum
+      const checksum = 'multi-library';
+      final partner = await ctx.newUser();
+      await ctx.newRemoteAsset(ownerId: partner.id, checksum: checksum);
+      await ctx.newRemoteAsset(ownerId: userId, checksum: checksum);
+      final local = await ctx.newLocalAsset(checksum: checksum);
+
+      final result = await sut.get(local.id);
+
+      expect(result, isNotNull);
+      expect(result!.id, local.id);
+      expect(result.remoteId, isNotNull);
+    });
+
+    test('attaches remoteId to local asset automatically in simple scenarios', () async {
+      const checksum = 'simple';
+      final remote = await ctx.newRemoteAsset(ownerId: userId, checksum: checksum);
+      final local = await ctx.newLocalAsset(checksum: checksum);
+
+      final result = await sut.get(local.id);
+
+      expect(result, isNotNull);
+      expect(result!.remoteId, remote.id);
+      expect(result.storage, AssetState.merged);
+    });
   });
 
   group('getRemovalCandidates', () {
@@ -374,197 +441,6 @@ void main() {
 
       expect(result.assets.length, 1);
       expect(result.assets.first.id, videoAsset.id);
-    });
-  });
-
-  group('reconcileHashesFromCloudId', () {
-    late String userId;
-
-    setUp(() async {
-      final user = await ctx.newUser();
-      userId = user.id;
-    });
-
-    test('updates local asset checksum when all metadata matches', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final remoteCloudAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id);
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: remoteCloudAsset.cloudId,
-        createdAt: remoteCloudAsset.createdAt,
-        adjustmentTime: remoteCloudAsset.adjustmentTime,
-        latitude: remoteCloudAsset.latitude,
-        longitude: remoteCloudAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, remoteAsset.checksum);
-    });
-
-    test('does not update when local asset already has checksum', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final remoteCloudAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id);
-
-      final localAsset = await ctx.newLocalAsset(
-        checksum: 'existing',
-        iCloudId: remoteCloudAsset.cloudId,
-        createdAt: remoteCloudAsset.createdAt,
-        adjustmentTime: remoteCloudAsset.adjustmentTime,
-        latitude: remoteCloudAsset.latitude,
-        longitude: remoteCloudAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, 'existing');
-    });
-
-    test('does not update when adjustment_time does not match', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id, adjustmentTime: DateTime(2024, 1, 12));
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: DateTime(2026, 1, 12),
-        latitude: cloudIdAsset.latitude,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('does not update when latitude does not match', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id, latitude: const Option.none());
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: 40.7128,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('does not update when longitude does not match', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id, longitude: .fromNullable((-74.006)));
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: cloudIdAsset.latitude,
-        longitude: 0.0,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('does not update when createdAt does not match', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id, createdAt: DateTime(2024, 1, 5));
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: DateTime(2024, 6, 1),
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: cloudIdAsset.latitude,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('does not update when iCloudId is null', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id);
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: null,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: cloudIdAsset.latitude,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('does not update when cloudId does not match iCloudId', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id);
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: 'different-cloud-id',
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: cloudIdAsset.latitude,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('handles partial null metadata fields matching correctly', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(
-        id: remoteAsset.id,
-        adjustmentTimeOption: const Option.none(),
-      );
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTimeOption: const Option.none(),
-        latitude: cloudIdAsset.latitude,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, remoteAsset.checksum);
-    });
-
-    test('does not update when one has null and other has value', () async {
-      final remoteAsset = await ctx.newRemoteAsset(ownerId: userId);
-      final cloudIdAsset = await ctx.newRemoteAssetCloudId(id: remoteAsset.id);
-      final localAsset = await ctx.newLocalAsset(
-        checksumOption: const Option.none(),
-        iCloudId: cloudIdAsset.cloudId,
-        createdAt: cloudIdAsset.createdAt,
-        adjustmentTime: cloudIdAsset.adjustmentTime,
-        latitude: null,
-        longitude: cloudIdAsset.longitude,
-      );
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
-    });
-
-    test('handles no matching assets gracefully', () async {
-      final localAsset = await ctx.newLocalAsset(checksumOption: const Option.none(), iCloudId: 'cloud-no-match');
-
-      await sut.reconcileHashesFromCloudId();
-      final updated = await sut.getById(localAsset.id);
-      expect(updated?.checksum, isNull);
     });
   });
 }

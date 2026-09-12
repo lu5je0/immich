@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 /// Bridge to the native fullscreen Ultra HDR overlay. The overlay lives in the
@@ -55,7 +57,7 @@ abstract final class UltraHdrSession {
 
   static void _safeInvoke(String method) {
     try {
-      _channel.invokeMethod(method).catchError((_) {});
+      unawaited(_channel.invokeMethod(method).catchError((_) {}));
     } catch (_) {
       // Missing implementation (e.g. engine restart) must never break the viewer.
     }
@@ -97,20 +99,22 @@ abstract final class UltraHdrSession {
       return;
     }
     _sendingSwipeOffset = true;
-    Future(() async {
-      try {
-        while (_pendingSwipeOffset != null) {
-          final offset = _pendingSwipeOffset!;
+    unawaited(
+      Future(() async {
+        try {
+          while (_pendingSwipeOffset != null) {
+            final offset = _pendingSwipeOffset!;
+            _pendingSwipeOffset = null;
+            await _channel.invokeMethod('setSwipeOffset', offset);
+          }
+        } catch (_) {
           _pendingSwipeOffset = null;
-          await _channel.invokeMethod('setSwipeOffset', offset);
+          // Missing implementation must never break the viewer.
+        } finally {
+          _sendingSwipeOffset = false;
         }
-      } catch (_) {
-        _pendingSwipeOffset = null;
-        // Missing implementation must never break the viewer.
-      } finally {
-        _sendingSwipeOffset = false;
-      }
-    });
+      }),
+    );
   }
 
   static Future<void> setChrome({required int top, required int bottom, required bool visible}) async {

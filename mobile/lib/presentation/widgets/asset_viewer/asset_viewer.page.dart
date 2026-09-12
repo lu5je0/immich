@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:auto_route/auto_route.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -14,6 +13,7 @@ import 'package:immich_mobile/domain/utils/event_stream.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/scroll_extensions.dart';
+import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/presentation/widgets/action_buttons/download_status_floating_button.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_page.widget.dart';
 import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_preloader.dart';
@@ -67,7 +67,8 @@ class AssetViewer extends ConsumerStatefulWidget {
   @override
   ConsumerState createState() => _AssetViewerState();
 
-  static void setAsset(WidgetRef ref, BaseAsset asset) {
+  /// Sets the asset and thumbnail size before opening the viewer.
+  static void setAsset(WidgetRef ref, BaseAsset asset, {Size? thumbnailSize}) {
     ref.read(assetViewerProvider.notifier).reset();
 
     // Hide controls by default for videos
@@ -75,11 +76,7 @@ class AssetViewer extends ConsumerStatefulWidget {
       ref.read(assetViewerProvider.notifier).setControls(false);
     }
 
-    _setAsset(ref, asset);
-  }
-
-  static void _setAsset(WidgetRef ref, BaseAsset asset) {
-    ref.read(assetViewerProvider.notifier).setAsset(asset);
+    ref.read(assetViewerProvider.notifier).setAsset(asset, thumbnailSize: thumbnailSize);
   }
 }
 
@@ -110,7 +107,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     final maxPage = _totalAssets - 1;
     if (target >= 0 && target <= maxPage) {
       _pageController.jumpToPage(target);
-      _onAssetChanged(target);
+      unawaited(_onAssetChanged(target));
     }
   }
 
@@ -129,14 +126,14 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     WidgetsBinding.instance.addPostFrameCallback(_onAssetInit);
 
     final assetViewer = ref.read(assetViewerProvider);
-    _setSystemUIMode(assetViewer.showingControls, assetViewer.showingDetails);
+    unawaited(_setSystemUIMode(assetViewer.showingControls, assetViewer.showingDetails));
   }
 
   @override
   void dispose() {
     _pageController.dispose();
     _preloader.dispose();
-    _reloadSubscription?.cancel();
+    unawaited(_reloadSubscription?.cancel());
     _stackChildrenKeepAlive?.close();
 
     // Ends the HDR window-mode session held since the first HDR photo was
@@ -178,7 +175,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
       ref.read(viewerPageScrollingProvider.notifier).state = false;
       final page = _pageController.page?.round();
       if (page != null && page != _currentPage) {
-        _onAssetChanged(page);
+        unawaited(_onAssetChanged(page));
       } else {
         UltraHdrSession.setSwipeOffset(0);
       }
@@ -187,11 +184,15 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
   }
 
   void _onAssetInit(Duration timeStamp) {
-    _preloader.preload(widget.initialIndex, context.sizeData);
+    _preloader.preload(
+      widget.initialIndex,
+      context.sizeData,
+      thumbnailSize: ref.read(assetViewerProvider).thumbnailSize,
+    );
     _handleCasting();
   }
 
-  void _onAssetChanged(int index) async {
+  Future<void> _onAssetChanged(int index) async {
     _currentPage = index;
 
     final asset = await ref.read(timelineServiceProvider).getAssetAsync(index);
@@ -205,11 +206,11 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
       return;
     }
 
-    AssetViewer._setAsset(ref, asset);
+    ref.read(assetViewerProvider.notifier).setAsset(asset);
     // Keep the grid positioned on the viewed asset so the closing hero
     // animation always has its destination tile laid out.
     EventStream.shared.emit(ScrollToAssetIndexEvent(ref.read(timelineServiceProvider), index));
-    _preloader.preload(index, context.sizeData);
+    _preloader.preload(index, context.sizeData, thumbnailSize: ref.read(assetViewerProvider).thumbnailSize);
     _handleCasting();
     _stackChildrenKeepAlive?.close();
     _stackChildrenKeepAlive = ref.read(stackChildrenNotifier(asset).notifier).ref.keepAlive();
@@ -236,7 +237,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
       SnackBar(
         duration: const Duration(seconds: 2),
         content: Text(
-          "local_asset_cast_failed".tr(),
+          context.t.local_asset_cast_failed,
           style: context.textTheme.bodyLarge?.copyWith(color: context.primaryColor),
         ),
       ),
@@ -249,8 +250,8 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
         _onTimelineReloadEvent();
       case ViewerReloadAssetEvent():
         _onViewerReloadEvent();
-      case ViewerStackAssetDeletedEvent event:
-        _onViewerStackAssetDeletedEvent(event);
+      case final ViewerStackAssetDeletedEvent event:
+        unawaited(_onViewerStackAssetDeletedEvent(event));
       default:
     }
   }
@@ -262,8 +263,8 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
 
     final index = _pageController.page?.round() ?? 0;
     final target = index >= _totalAssets - 1 ? index - 1 : index + 1;
-    _pageController.animateToPage(target, duration: Durations.medium1, curve: Curves.easeInOut);
-    _onAssetChanged(target);
+    unawaited(_pageController.animateToPage(target, duration: Durations.medium1, curve: Curves.easeInOut));
+    unawaited(_onAssetChanged(target));
   }
 
   Future<void> _onViewerStackAssetDeletedEvent(ViewerStackAssetDeletedEvent event) async {
@@ -298,7 +299,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     final totalAssets = timelineService.totalAssets;
 
     if (totalAssets == 0) {
-      context.maybePop();
+      unawaited(context.maybePop());
       return;
     }
 
@@ -308,14 +309,14 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
 
     if (index != _currentPage) {
       _pageController.jumpToPage(index);
-      _onAssetChanged(index);
+      unawaited(_onAssetChanged(index));
     } else if (currentAsset is RemoteAsset && currentAsset.stackId != null && assetIndex == null) {
       final timelineAsset = timelineService.getAssetSafe(index);
       if (timelineAsset is! RemoteAsset || currentAsset.stackId != timelineAsset.stackId) {
-        _onAssetChanged(index);
+        unawaited(_onAssetChanged(index));
       }
     } else if (currentAsset != null && assetIndex == null) {
-      _onAssetChanged(index);
+      unawaited(_onAssetChanged(index));
     }
 
     if (_totalAssets != totalAssets) {
@@ -325,9 +326,9 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
     }
   }
 
-  void _setSystemUIMode(bool controls, bool details) {
+  Future<void> _setSystemUIMode(bool controls, bool details) {
     final immersive = !controls || (CurrentPlatform.isIOS && details);
-    unawaited(immersive ? SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky) : restoreEdgeToEdge());
+    return immersive ? SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky) : restoreEdgeToEdge();
   }
 
   @override
@@ -351,7 +352,7 @@ class _AssetViewerState extends ConsumerState<AssetViewer> {
 
     ref.listen(assetViewerProvider.select((value) => (value.showingControls, value.showingDetails)), (_, state) {
       final (controls, details) = state;
-      _setSystemUIMode(controls, details);
+      unawaited(_setSystemUIMode(controls, details));
     });
 
     return AnnotatedRegion(

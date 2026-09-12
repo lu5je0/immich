@@ -1,6 +1,6 @@
-import { AssetEditAction, AssetEditActionItem } from 'src/dtos/editing.dto';
-import { AssetOcrResponseDto } from 'src/dtos/ocr.dto';
-import { ImageDimensions } from 'src/types';
+import { AssetEditAction, AssetEditActionItem } from 'src/dtos/editing.dto.js';
+import { AssetOcrResponseDto } from 'src/dtos/ocr.dto.js';
+import type { ImageDimensions } from 'src/types.js';
 import { applyToPoint, compose, flipX, flipY, identity, Matrix, rotate, scale, translate } from 'transformation-matrix';
 
 export const getOutputDimensions = (
@@ -227,7 +227,7 @@ export const transformOcrBoundingBox = (
   const { points: transformedPoints, currentWidth, currentHeight } = transformPoints(points, edits, imageDimensions);
 
   // Reorder points to maintain semantic ordering (topLeft, topRight, bottomRight, bottomLeft)
-  const netRotation = edits.find((e) => e.action == AssetEditAction.Rotate)?.parameters.angle ?? 0 % 360;
+  const netRotation = edits.find((e) => e.action === AssetEditAction.Rotate)?.parameters.angle ?? 0 % 360;
   const reorderedPoints = reorderQuadPointsForRotation(transformedPoints, netRotation);
 
   const [p1, p2, p3, p4] = reorderedPoints;
