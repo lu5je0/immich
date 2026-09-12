@@ -6,7 +6,9 @@ Guidance for AI coding agents working in this fork of Immich.
 
 - `mobile/` — Flutter app (Android/iOS). Main work area of this fork.
 - `server/` — NestJS API server. `web/` — SvelteKit web app. `i18n/` — translations.
-- `.env/` — local-only build toolchain (Flutter SDK, Android SDK); gitignored, do not commit.
+- `shell.nix` — nix-shell with the whole mobile toolchain (Flutter 3.47.2, Android
+  SDK 33-36 + NDK 28.2.13676358 + CMake 3.22.1, JDK 21). `.env/tools/` holds local
+  performance-profiling artifacts; gitignored.
 
 ## Fork-specific feature: Android Ultra HDR viewer
 
@@ -51,15 +53,26 @@ Behavioral contract (validated on a 120 Hz Android 16 device):
 
 ## Mobile build & test
 
+All mobile tooling comes from the repo-root `nix-shell` (Flutter 3.47.2, Android
+SDK, JDK 21), so no env vars need to be exported. Run the codegen commands below
+whenever generated code is missing or stale (a fresh checkout has none of it).
+
 ```sh
-export JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.2-tem
-export ANDROID_HOME=<repo>/.env/android-sdk
-export PATH="<repo>/.env/flutter/bin:$JAVA_HOME/bin:$PATH"
+nix-shell                                    # from the repo root
 cd mobile
-dart analyze <changed files>
+dart run build_runner build                  # freezed/drift/router codegen
+dart run drift_dev make-migrations           # lib/data/db/main/database.steps.dart
+dart run drift_dev schema generate --data-classes --companions drift_schemas/main/ test/drift/main/generated/
+dart run easy_localization:generate -S ../i18n && dart run bin/generate_keys.dart
+ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
+dart analyze --fatal-infos
 flutter build apk --release --target-platform android-arm64 --split-per-abi
 adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
+
+The generated OpenAPI client lives in `mobile/generated/openapi`; regenerate it
+from `open-api/` with `bash ./bin/generate-dart-sdk.sh` (the shell provides a
+pinned `openapi-generator-cli`). The other codegen steps above run from `mobile/`.
 
 Debug builds are too slow for perf testing; always verify HDR/scroll smoothness
 with a release build on a real device.
