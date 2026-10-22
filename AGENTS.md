@@ -6,9 +6,9 @@ Guidance for AI coding agents working in this fork of Immich.
 
 - `mobile/` — Flutter app (Android/iOS). Main work area of this fork.
 - `server/` — NestJS API server. `web/` — SvelteKit web app. `i18n/` — translations.
-- `shell.nix` — nix-shell with the whole mobile toolchain (Flutter 3.47.2, Android
-  SDK 33-36 + NDK 28.2.13676358 + CMake 3.22.1, JDK 21). `.env/tools/` holds local
-  performance-profiling artifacts; gitignored.
+- `flake.nix` / `flake.lock` — pinned `nix develop` environment with the mobile
+  toolchain (Flutter 3.47.2, Android SDK 33-36 + NDK 28.2.13676358 + CMake 3.22.1,
+  JDK 21). `.env/tools/` holds local performance-profiling artifacts; gitignored.
 
 ## Fork-specific feature: Android Ultra HDR viewer
 
@@ -53,12 +53,14 @@ Behavioral contract (validated on a 120 Hz Android 16 device):
 
 ## Mobile build & test
 
-All mobile tooling comes from the repo-root `nix-shell` (Flutter 3.47.2, Android
-SDK, JDK 21), so no env vars need to be exported. Run the codegen commands below
+All mobile tooling comes from the repo-root `nix develop` (Flutter 3.47.2, Android
+SDK, JDK 21), with nixpkgs pinned in `flake.lock`, so no env vars need to be exported.
+The dev shell currently supports Linux x86_64. Update nixpkgs deliberately with
+`nix flake update nixpkgs`. Run the codegen commands below
 whenever generated code is missing or stale (a fresh checkout has none of it).
 
 ```sh
-nix-shell                                    # from the repo root
+nix develop                                  # from the repo root
 cd mobile
 dart run build_runner build                  # freezed/drift/router codegen
 dart run drift_dev make-migrations           # lib/data/db/main/database.steps.dart
