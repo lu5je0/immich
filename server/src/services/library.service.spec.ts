@@ -1,18 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
 import { Stats } from 'node:fs';
+import { vitest } from 'vitest';
+import type { ILibraryBulkIdsJob, ILibraryFileJob } from 'src/types.js';
 import { JOBS_LIBRARY_PAGINATION_SIZE } from 'src/constants.js';
-import { defaults, SystemConfig } from 'src/dtos/config.dto.js';
+import { SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { mapLibrary } from 'src/dtos/library.dto.js';
 import { AssetType, CronJob, ImmichWorker, JobName, JobStatus } from 'src/enum.js';
 import { LibraryService } from 'src/services/library.service.js';
-import type { ILibraryBulkIdsJob, ILibraryFileJob } from 'src/types.js';
 import { AssetFactory } from 'test/factories/asset.factory.js';
 import { authStub } from 'test/fixtures/auth.stub.js';
 import { systemConfigStub } from 'test/fixtures/system-config.stub.js';
 import { makeMockWatcher } from 'test/repositories/storage.repository.mock.js';
 import { factory, newDate, newUuid } from 'test/small.factory.js';
-import { makeStream, newTestService, ServiceMocks } from 'test/utils.js';
-import { vitest } from 'vitest';
+import { ServiceMocks, makeStream, newTestService } from 'test/utils.js';
 
 async function* mockWalk() {
   // eslint-disable-next-line unicorn/no-useless-promise-resolve-reject
@@ -940,6 +940,24 @@ describe(LibraryService.name, () => {
         await sut.watchAll();
 
         expect(mocks.storage.watch).toHaveBeenCalledWith(library.importPaths, expect.anything(), expect.anything());
+      });
+
+      it('should exclude paths from the watcher', async () => {
+        const library = factory.library({
+          importPaths: ['/foo', '/bar'],
+          exclusionPatterns: ['**/excluded/**'],
+        });
+
+        mocks.library.get.mockResolvedValue(library);
+        mocks.library.getAll.mockResolvedValue([library]);
+
+        await sut.watchAll();
+
+        expect(mocks.storage.watch).toHaveBeenCalledWith(
+          library.importPaths,
+          expect.objectContaining({ ignored: library.exclusionPatterns }),
+          expect.anything(),
+        );
       });
 
       it('should watch and unwatch library', async () => {
